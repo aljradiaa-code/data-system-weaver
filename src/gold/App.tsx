@@ -23,6 +23,7 @@ import { auditData } from './auditData';
 import CandleChart from './components/CandleChart';
 import StatCard from './components/StatCard';
 import CSVUploader from './components/CSVUploader';
+import { fetchAllFrames, fetchTwelveData, TD_KEY_STORAGE } from './twelvedata';
 
 type Tab = 'bt' | 'neural' | 'portfolio' | 'live' | 'data' | 'audit';
 const SPEED_MS = [400, 250, 120, 45, 10];
@@ -64,6 +65,10 @@ export default function App() {
   const [aiText, setAiText] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState('');
+
+  const [tdKey, setTdKey] = useState('');
+  const [tdBusy, setTdBusy] = useState(false);
+  const [tdError, setTdError] = useState('');
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
