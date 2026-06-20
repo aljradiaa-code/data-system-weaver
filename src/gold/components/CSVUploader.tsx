@@ -73,7 +73,7 @@ export default function CSVUploader({ files, onLoad, onApply, onReset }: Props) 
                 {loaded ? `${loaded.length} شمعة محملة` : 'اضغط لاختيار ملف'}
               </div>
               <input
-                ref={(el) => (refs.current[tf] = el)}
+                ref={(el) => { refs.current[tf] = el; }}
                 type="file"
                 accept=".csv,.txt"
                 className="hidden"
