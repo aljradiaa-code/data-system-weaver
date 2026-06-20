@@ -77,16 +77,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Gold AI v2 — منصة الذهب الذكية" },
+      { name: "description", content: "منصة تداول الذهب الذكية بمحرك ICT/SMC وشبكة عصبية." },
+      { name: "author", content: "Gold AI" },
+      { property: "og:title", content: "Gold AI v2 — منصة الذهب الذكية" },
+      { property: "og:description", content: "منصة تداول الذهب الذكية بمحرك ICT/SMC وشبكة عصبية." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Rajdhani:wght@600;700;800&display=swap",
+      },
       {
         rel: "stylesheet",
         href: appCss,
@@ -101,11 +107,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="ar" dir="rtl">
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body className="bg-[#03060d] text-[#c5d4e8]">
         {children}
         <Scripts />
       </body>
