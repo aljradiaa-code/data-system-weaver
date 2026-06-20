@@ -658,6 +658,52 @@ export default function App() {
         {tab === 'live' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 space-y-4">
+              <div className="bg-[#060b15] border border-gold/15 rounded-xl p-4 space-y-3">
+                <h3 className="text-sm font-bold font-sans text-white flex items-center gap-2">
+                  <Database size={14} className="text-gold" /> بيانات حية — TwelveData
+                </h3>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="password"
+                    value={tdKey}
+                    onChange={(e) => setTdKey(e.target.value)}
+                    placeholder="مفتاح API الخاص بـ TwelveData"
+                    className="flex-1 bg-[#09101d] border border-slate-700 rounded-lg p-2.5 text-white text-xs"
+                  />
+                  <button
+                    onClick={saveTdKey}
+                    className="bg-[#0f172a] border border-slate-700 px-3 py-2 rounded-lg text-gold text-[11px] font-bold"
+                  >حفظ المفتاح</button>
+                </div>
+                <button
+                  onClick={loadFromTD}
+                  disabled={tdBusy || !tdKey.trim()}
+                  className="w-full bg-gradient-to-r from-gold to-gold2 text-black font-bold font-sans py-2.5 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={tdBusy ? 'animate-spin' : ''} />
+                  {tdBusy ? 'جارٍ التحميل…' : 'تحميل آخر 200 شمعة لكل فريم (H4/H1/M15/M5)'}
+                </button>
+                {tdError && <div className="bg-red-950/20 border border-red-900/30 p-2 rounded-lg text-rose-400 text-[11px]">{tdError}</div>}
+                <div className="grid grid-cols-4 gap-2 text-center text-[10px]">
+                  {(['H4','H1','M15','M5'] as TF[]).map((f) => (
+                    <div key={f} className="bg-[#09101d] border border-slate-800/60 rounded p-1.5">
+                      <div className="text-gold font-bold">{f}</div>
+                      <div className="text-gray-400">{liveHist[f].length} شمعة</div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  تُحفظ مفاتيح API محلياً في متصفحك فقط. الخطة المجانية لـ TwelveData محدودة بـ 8 طلبات/دقيقة.
+                </p>
+              </div>
+
+              <div className="bg-[#060b15] border border-gold/5 rounded-lg p-2 flex items-center gap-1">
+                {(['H4', 'H1', 'M15', 'M5'] as TF[]).map((tf) => (
+                  <button key={tf} onClick={() => setChartTF(tf)}
+                    className={`px-3 py-1 text-[10px] rounded font-bold ${chartTF === tf ? 'bg-gold/15 text-gold border border-gold/30' : 'bg-[#0d1424] text-gray-500 border border-gold/5 hover:text-white'}`}>{tf}</button>
+                ))}
+              </div>
+
               <div className="bg-[#040810] border border-gold/10 rounded-xl overflow-hidden">
                 <CandleChart candles={liveHist[chartTF]} trade={liveOpen} />
               </div>
