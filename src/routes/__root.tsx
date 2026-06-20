@@ -85,6 +85,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "Gold AI v2 — منصة الذهب الذكية" },
+      { name: "twitter:description", content: "منصة تداول الذهب الذكية بمحرك ICT/SMC وشبكة عصبية." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/xN6b9nNWAcXsK5l4MYP6aknkTyn1/social-images/social-1781916588859-IMG-20251114-WA0002.webp" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/xN6b9nNWAcXsK5l4MYP6aknkTyn1/social-images/social-1781916588859-IMG-20251114-WA0002.webp" },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
