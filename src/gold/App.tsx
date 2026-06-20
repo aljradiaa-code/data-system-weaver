@@ -59,7 +59,7 @@ export default function App() {
   const [liveTrades, setLiveTrades] = useState<Backtrade[]>([]);
   const [liveOpen, setLiveOpen] = useState<Backtrade | null>(null);
   const [liveBalance, setLiveBalance] = useState(10000);
-  const [liveCountdown, setLiveCountdown] = useState(3);
+  const [liveCountdown, setLiveCountdown] = useState(200);
 
   const [aiText, setAiText] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -338,9 +338,9 @@ export default function App() {
   }, [liveOpen, liveBalance, nn, nnEnabled, threshold, portfolio.riskPerTrade]);
 
   useEffect(() => {
-    if (!liveActive) { setLiveCountdown(3); return; }
+    if (!liveActive) { setLiveCountdown(200); return; }
     const iv = setInterval(() => {
-      setLiveCountdown((p) => { if (p <= 1) { liveTick(); return 3; } return p - 1; });
+      setLiveCountdown((p) => { if (p <= 1) { liveTick(); return 200; } return p - 1; });
     }, 1000);
     return () => clearInterval(iv);
   }, [liveActive, liveTick]);
