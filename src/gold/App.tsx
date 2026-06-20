@@ -90,6 +90,40 @@ export default function App() {
     setStatus(`✅ تم توليد ${data.H1.length} شمعة هيكلية${loaded ? ' (أوزان الشبكة السابقة نشطة)' : ''}.`);
   }, []);
 
+  /* ---------------------- TwelveData key boot ---------------------- */
+  useEffect(() => {
+    try {
+      const k = localStorage.getItem(TD_KEY_STORAGE);
+      if (k) setTdKey(k);
+    } catch {}
+  }, []);
+
+  const saveTdKey = () => {
+    try { localStorage.setItem(TD_KEY_STORAGE, tdKey.trim()); } catch {}
+    setTdError('');
+    setStatus('🔑 تم حفظ مفتاح TwelveData.');
+  };
+
+  const loadFromTD = async () => {
+    const key = tdKey.trim();
+    if (!key) { setTdError('أدخل مفتاح TwelveData أولاً.'); return; }
+    setTdBusy(true); setTdError('');
+    try {
+      const mtf = await fetchAllFrames(key, 200);
+      setLiveHist(mtf);
+      setHist(mtf);
+      setCursor(40);
+      setTrades([]); setOpenTrade(null);
+      setEquity([portfolio.initialBalance]);
+      setPortfolio((p) => ({ ...p, balance: p.initialBalance }));
+      setStatus(`📡 TwelveData: H4=${mtf.H4.length} · H1=${mtf.H1.length} · M15=${mtf.M15.length} · M5=${mtf.M5.length}`);
+    } catch (e: any) {
+      setTdError(e?.message || 'فشل التحميل.');
+    } finally {
+      setTdBusy(false);
+    }
+  };
+
   /* ------------------- derived signal / zones ------------------- */
   const activeH4 = useMemo(() => hist.H4.slice(0, Math.floor(cursor / 4) + 1), [cursor, hist]);
   const activeH1 = useMemo(() => hist.H1.slice(0, cursor + 1), [cursor, hist]);
