@@ -4,6 +4,26 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@theme {
+  --color-gold: #ffd900;
+  --color-gold2: #ff9500;
+  --font-sans: "Rajdhani", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+@keyframes pulse-gold {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse-gold {
+  animation: pulse-gold 1.6s ease-in-out infinite;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #060b15; }
+::-webkit-scrollbar-thumb { background: #1f2d45; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #ffd900; }
+
 /*
  * Design system definition.
  *
