@@ -379,10 +379,26 @@ export default function App() {
   useEffect(() => {
     if (!liveActive) { setLiveCountdown(200); return; }
     const iv = setInterval(() => {
-      setLiveCountdown((p) => { if (p <= 1) { liveTick(); return 200; } return p - 1; });
+      setLiveCountdown((p) => {
+        if (p <= 1) {
+          const key = tdKey.trim();
+          if (key) {
+            fetchTwelveData(key, 'H1', 200)
+              .then((H1) => {
+                setLiveHist((prev) => ({ ...prev, H1 }));
+                setStatus(`📡 تحديث حي من TwelveData (${new Date().toLocaleTimeString('ar')})`);
+              })
+              .catch((e) => setTdError(e?.message || 'فشل التحديث الحي.'));
+          } else {
+            liveTick();
+          }
+          return 200;
+        }
+        return p - 1;
+      });
     }, 1000);
     return () => clearInterval(iv);
-  }, [liveActive, liveTick]);
+  }, [liveActive, liveTick, tdKey]);
 
   /* ------------------------ AI ------------------------ */
   const consult = async () => {
