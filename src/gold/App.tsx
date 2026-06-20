@@ -23,6 +23,7 @@ import { auditData } from './auditData';
 import CandleChart from './components/CandleChart';
 import StatCard from './components/StatCard';
 import CSVUploader from './components/CSVUploader';
+import { fetchAllFrames, fetchTwelveData, TD_KEY_STORAGE } from './twelvedata';
 
 type Tab = 'bt' | 'neural' | 'portfolio' | 'live' | 'data' | 'audit';
 const SPEED_MS = [400, 250, 120, 45, 10];
@@ -65,6 +66,10 @@ export default function App() {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState('');
 
+  const [tdKey, setTdKey] = useState('');
+  const [tdBusy, setTdBusy] = useState(false);
+  const [tdError, setTdError] = useState('');
+
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* -------------------------- boot -------------------------- */
@@ -84,6 +89,40 @@ export default function App() {
     });
     setStatus(`✅ تم توليد ${data.H1.length} شمعة هيكلية${loaded ? ' (أوزان الشبكة السابقة نشطة)' : ''}.`);
   }, []);
+
+  /* ---------------------- TwelveData key boot ---------------------- */
+  useEffect(() => {
+    try {
+      const k = localStorage.getItem(TD_KEY_STORAGE);
+      if (k) setTdKey(k);
+    } catch {}
+  }, []);
+
+  const saveTdKey = () => {
+    try { localStorage.setItem(TD_KEY_STORAGE, tdKey.trim()); } catch {}
+    setTdError('');
+    setStatus('🔑 تم حفظ مفتاح TwelveData.');
+  };
+
+  const loadFromTD = async () => {
+    const key = tdKey.trim();
+    if (!key) { setTdError('أدخل مفتاح TwelveData أولاً.'); return; }
+    setTdBusy(true); setTdError('');
+    try {
+      const mtf = await fetchAllFrames(key, 200);
+      setLiveHist(mtf);
+      setHist(mtf);
+      setCursor(40);
+      setTrades([]); setOpenTrade(null);
+      setEquity([portfolio.initialBalance]);
+      setPortfolio((p) => ({ ...p, balance: p.initialBalance }));
+      setStatus(`📡 TwelveData: H4=${mtf.H4.length} · H1=${mtf.H1.length} · M15=${mtf.M15.length} · M5=${mtf.M5.length}`);
+    } catch (e: any) {
+      setTdError(e?.message || 'فشل التحميل.');
+    } finally {
+      setTdBusy(false);
+    }
+  };
 
   /* ------------------- derived signal / zones ------------------- */
   const activeH4 = useMemo(() => hist.H4.slice(0, Math.floor(cursor / 4) + 1), [cursor, hist]);
@@ -340,10 +379,26 @@ export default function App() {
   useEffect(() => {
     if (!liveActive) { setLiveCountdown(200); return; }
     const iv = setInterval(() => {
-      setLiveCountdown((p) => { if (p <= 1) { liveTick(); return 200; } return p - 1; });
+      setLiveCountdown((p) => {
+        if (p <= 1) {
+          const key = tdKey.trim();
+          if (key) {
+            fetchTwelveData(key, 'H1', 200)
+              .then((H1) => {
+                setLiveHist((prev) => ({ ...prev, H1 }));
+                setStatus(`📡 تحديث حي من TwelveData (${new Date().toLocaleTimeString('ar')})`);
+              })
+              .catch((e) => setTdError(e?.message || 'فشل التحديث الحي.'));
+          } else {
+            liveTick();
+          }
+          return 200;
+        }
+        return p - 1;
+      });
     }, 1000);
     return () => clearInterval(iv);
-  }, [liveActive, liveTick]);
+  }, [liveActive, liveTick, tdKey]);
 
   /* ------------------------ AI ------------------------ */
   const consult = async () => {
@@ -603,6 +658,52 @@ export default function App() {
         {tab === 'live' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 space-y-4">
+              <div className="bg-[#060b15] border border-gold/15 rounded-xl p-4 space-y-3">
+                <h3 className="text-sm font-bold font-sans text-white flex items-center gap-2">
+                  <Database size={14} className="text-gold" /> بيانات حية — TwelveData
+                </h3>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="password"
+                    value={tdKey}
+                    onChange={(e) => setTdKey(e.target.value)}
+                    placeholder="مفتاح API الخاص بـ TwelveData"
+                    className="flex-1 bg-[#09101d] border border-slate-700 rounded-lg p-2.5 text-white text-xs"
+                  />
+                  <button
+                    onClick={saveTdKey}
+                    className="bg-[#0f172a] border border-slate-700 px-3 py-2 rounded-lg text-gold text-[11px] font-bold"
+                  >حفظ المفتاح</button>
+                </div>
+                <button
+                  onClick={loadFromTD}
+                  disabled={tdBusy || !tdKey.trim()}
+                  className="w-full bg-gradient-to-r from-gold to-gold2 text-black font-bold font-sans py-2.5 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={tdBusy ? 'animate-spin' : ''} />
+                  {tdBusy ? 'جارٍ التحميل…' : 'تحميل آخر 200 شمعة لكل فريم (H4/H1/M15/M5)'}
+                </button>
+                {tdError && <div className="bg-red-950/20 border border-red-900/30 p-2 rounded-lg text-rose-400 text-[11px]">{tdError}</div>}
+                <div className="grid grid-cols-4 gap-2 text-center text-[10px]">
+                  {(['H4','H1','M15','M5'] as TF[]).map((f) => (
+                    <div key={f} className="bg-[#09101d] border border-slate-800/60 rounded p-1.5">
+                      <div className="text-gold font-bold">{f}</div>
+                      <div className="text-gray-400">{liveHist[f].length} شمعة</div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  تُحفظ مفاتيح API محلياً في متصفحك فقط. الخطة المجانية لـ TwelveData محدودة بـ 8 طلبات/دقيقة.
+                </p>
+              </div>
+
+              <div className="bg-[#060b15] border border-gold/5 rounded-lg p-2 flex items-center gap-1">
+                {(['H4', 'H1', 'M15', 'M5'] as TF[]).map((tf) => (
+                  <button key={tf} onClick={() => setChartTF(tf)}
+                    className={`px-3 py-1 text-[10px] rounded font-bold ${chartTF === tf ? 'bg-gold/15 text-gold border border-gold/30' : 'bg-[#0d1424] text-gray-500 border border-gold/5 hover:text-white'}`}>{tf}</button>
+                ))}
+              </div>
+
               <div className="bg-[#040810] border border-gold/10 rounded-xl overflow-hidden">
                 <CandleChart candles={liveHist[chartTF]} trade={liveOpen} />
               </div>
