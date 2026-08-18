@@ -1,0 +1,971 @@
+name: Gold AI - Smart Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Android build type"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+
+      auto_repair:
+        description: "Enable safe automatic repair"
+        required: true
+        default: true
+        type: boolean
+
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gold-ai-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  JAVA_VERSION: "21"
+  ANDROID_API: "35"
+  BUILD_TOOLS: "35.0.0"
+
+
+jobs:
+
+  # ============================================================
+  # 1. PROJECT AUDIT
+  # ============================================================
+
+  audit:
+    name: "1 - Project Audit"
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 20
+
+    outputs:
+      package_manager: ${{ steps.detect.outputs.package_manager }}
+      install_mode: ${{ steps.detect.outputs.install_mode }}
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Detect package manager
+        id: detect
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " GOLD AI - PACKAGE MANAGER DETECTION"
+          echo "=========================================="
+
+          if [ -f package-lock.json ]; then
+
+            echo "package_manager=npm" >> "$GITHUB_OUTPUT"
+            echo "install_mode=locked" >> "$GITHUB_OUTPUT"
+
+            echo "Detected: npm"
+            echo "Lockfile: package-lock.json"
+
+          elif [ -f npm-shrinkwrap.json ]; then
+
+            echo "package_manager=npm" >> "$GITHUB_OUTPUT"
+            echo "install_mode=locked" >> "$GITHUB_OUTPUT"
+
+            echo "Detected: npm"
+            echo "Lockfile: npm-shrinkwrap.json"
+
+          elif [ -f pnpm-lock.yaml ]; then
+
+            echo "package_manager=pnpm" >> "$GITHUB_OUTPUT"
+            echo "install_mode=locked" >> "$GITHUB_OUTPUT"
+
+            echo "Detected: pnpm"
+            echo "Lockfile: pnpm-lock.yaml"
+
+          elif [ -f yarn.lock ]; then
+
+            echo "package_manager=yarn" >> "$GITHUB_OUTPUT"
+            echo "install_mode=locked" >> "$GITHUB_OUTPUT"
+
+            echo "Detected: yarn"
+            echo "Lockfile: yarn.lock"
+
+          elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+
+            echo "package_manager=bun" >> "$GITHUB_OUTPUT"
+            echo "install_mode=locked" >> "$GITHUB_OUTPUT"
+
+            echo "Detected: bun"
+
+          else
+
+            echo "package_manager=npm" >> "$GITHUB_OUTPUT"
+            echo "install_mode=unlocked" >> "$GITHUB_OUTPUT"
+
+            echo "::warning::No dependency lockfile found."
+            echo "Fallback package manager: npm"
+            echo "Installation mode: npm install"
+
+          fi
+
+      - name: Print environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " ENVIRONMENT"
+          echo "=========================================="
+
+          node --version
+          npm --version
+
+          echo
+          echo "Working directory:"
+          pwd
+
+          echo
+          echo "Project files:"
+          find . -maxdepth 2 -type f \
+            ! -path "./.git/*" \
+            | sort | head -300
+
+      - name: Verify package.json
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -f package.json || {
+            echo "::error::package.json was not found."
+            exit 1
+          }
+
+          node <<'NODE'
+          const fs = require("fs");
+
+          const pkg = JSON.parse(
+            fs.readFileSync("package.json", "utf8")
+          );
+
+          console.log("Project name:", pkg.name || "unknown");
+          console.log("Project version:", pkg.version || "unknown");
+
+          if (!pkg.scripts) {
+            console.error("package.json has no scripts section.");
+            process.exit(1);
+          }
+
+          const requiredScripts = [
+            "build",
+            "build:mobile"
+          ];
+
+          for (const script of requiredScripts) {
+            if (!pkg.scripts[script]) {
+              console.error(`Missing required script: ${script}`);
+              process.exit(1);
+            }
+          }
+
+          console.log("Required npm scripts verified.");
+          NODE
+
+      - name: Verify required project files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          REQUIRED=(
+            "package.json"
+            "capacitor.config.ts"
+            "vite.config.ts"
+            "tsconfig.json"
+            "src"
+            "scripts/build-mobile-html.js"
+          )
+
+          for ITEM in "${REQUIRED[@]}"; do
+
+            if [ ! -e "$ITEM" ]; then
+              echo "::error::Required project item is missing: $ITEM"
+              exit 1
+            fi
+
+          done
+
+          echo "All required project files exist."
+
+      - name: Verify Capacitor configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " CAPACITOR CONFIGURATION"
+          echo "=========================================="
+
+          grep -q "com.goldai.v2" capacitor.config.ts || {
+            echo "::error::Expected Capacitor appId com.goldai.v2 was not found."
+            exit 1
+          }
+
+          grep -q "dist/client" capacitor.config.ts || {
+            echo "::error::Expected webDir dist/client was not found."
+            exit 1
+          }
+
+          echo "appId: com.goldai.v2"
+          echo "webDir: dist/client"
+          echo "Capacitor configuration verified."
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " INSTALLING DEPENDENCIES"
+          echo "=========================================="
+
+          case "${{ steps.detect.outputs.package_manager }}" in
+
+            npm)
+
+              if [ "${{ steps.detect.outputs.install_mode }}" = "locked" ]; then
+                npm ci --no-audit --no-fund
+              else
+                npm install --no-audit --no-fund
+              fi
+
+              ;;
+
+            pnpm)
+
+              corepack enable
+              pnpm install --frozen-lockfile
+
+              ;;
+
+            yarn)
+
+              corepack enable
+              yarn install --frozen-lockfile
+
+              ;;
+
+            bun)
+
+              curl -fsSL https://bun.sh/install | bash
+
+              export BUN_INSTALL="$HOME/.bun"
+              export PATH="$BUN_INSTALL/bin:$PATH"
+
+              bun install --frozen-lockfile
+
+              ;;
+
+            *)
+
+              echo "::error::Unsupported package manager."
+              exit 1
+
+              ;;
+
+          esac
+
+      - name: TypeScript validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          npx tsc --noEmit
+
+      - name: ESLint validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          npm run lint
+
+
+  # ============================================================
+  # 2. WEB BUILD
+  # ============================================================
+
+  web-build:
+    name: "2 - Web Production Build"
+
+    needs: audit
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 25
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+
+            npm ci --no-audit --no-fund
+
+          elif [ -f pnpm-lock.yaml ]; then
+
+            corepack enable
+            pnpm install --frozen-lockfile
+
+          elif [ -f yarn.lock ]; then
+
+            corepack enable
+            yarn install --frozen-lockfile
+
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+
+            curl -fsSL https://bun.sh/install | bash
+
+            export BUN_INSTALL="$HOME/.bun"
+            export PATH="$BUN_INSTALL/bin:$PATH"
+
+            bun install --frozen-lockfile
+
+          else
+
+            npm install --no-audit --no-fund
+
+          fi
+
+      - name: Build web application
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          npm run build
+
+      - name: Generate mobile HTML
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          node scripts/build-mobile-html.js
+
+      - name: Verify web output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " WEB OUTPUT VERIFICATION"
+          echo "=========================================="
+
+          if [ ! -f dist/client/index.html ]; then
+            echo "::error::dist/client/index.html was not generated."
+            exit 1
+          fi
+
+          if [ ! -d dist/client/assets ]; then
+            echo "::error::dist/client/assets directory is missing."
+            exit 1
+          fi
+
+          echo "index.html: OK"
+          echo "assets: OK"
+
+          echo
+          echo "Generated files:"
+          find dist/client -maxdepth 2 -type f | sort | head -200
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-web-build
+          path: dist/client
+          retention-days: 7
+
+
+  # ============================================================
+  # 3. ANDROID PREPARATION
+  # ============================================================
+
+  android-prepare:
+    name: "3 - Prepare Android Project"
+
+    needs:
+      - audit
+      - web-build
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${{ env.ANDROID_API }}" \
+            "build-tools;${{ env.BUILD_TOOLS }}"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+
+            npm ci --no-audit --no-fund
+
+          elif [ -f pnpm-lock.yaml ]; then
+
+            corepack enable
+            pnpm install --frozen-lockfile
+
+          elif [ -f yarn.lock ]; then
+
+            corepack enable
+            yarn install --frozen-lockfile
+
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+
+            curl -fsSL https://bun.sh/install | bash
+
+            export BUN_INSTALL="$HOME/.bun"
+            export PATH="$BUN_INSTALL/bin:$PATH"
+
+            bun install --frozen-lockfile
+
+          else
+
+            npm install --no-audit --no-fund
+
+          fi
+
+      - name: Build mobile web application
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          npm run build:mobile
+
+      - name: Verify mobile output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -f dist/client/index.html || {
+            echo "::error::Mobile index.html does not exist."
+            exit 1
+          }
+
+      - name: Create Android platform if missing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ ! -d android ]; then
+
+            echo "Android project does not exist."
+            echo "Creating Android platform with Capacitor..."
+
+            npx cap add android
+
+          else
+
+            echo "Android project already exists."
+
+          fi
+
+      - name: Sync Capacitor
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          npx cap sync android
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " ANDROID PROJECT VERIFICATION"
+          echo "=========================================="
+
+          test -d android || {
+            echo "::error::android directory missing."
+            exit 1
+          }
+
+          test -d android/app || {
+            echo "::error::android/app directory missing."
+            exit 1
+          }
+
+          test -f android/gradlew || {
+            echo "::error::android/gradlew missing."
+            exit 1
+          }
+
+          chmod +x android/gradlew
+
+          if [ -f android/settings.gradle ]; then
+            echo "settings.gradle: OK"
+          fi
+
+          if [ -f android/settings.gradle.kts ]; then
+            echo "settings.gradle.kts: OK"
+          fi
+
+          echo "Android project verified."
+
+      - name: Configure Android SDK path
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          if [ -z "$SDK_PATH" ]; then
+            echo "::error::Android SDK path was not detected."
+            exit 1
+          fi
+
+          printf 'sdk.dir=%s\n' "$SDK_PATH" > android/local.properties
+
+          echo "Android SDK:"
+          cat android/local.properties
+
+      - name: Upload Android project
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-android-project
+          path: android
+          retention-days: 7
+
+
+  # ============================================================
+  # 4. SMART ANDROID BUILD
+  # ============================================================
+
+  android-build:
+    name: "4 - Smart Android Build"
+
+    needs: android-prepare
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 45
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${{ env.ANDROID_API }}" \
+            "build-tools;${{ env.BUILD_TOOLS }}"
+
+      - name: Download Android project
+        uses: actions/download-artifact@v4
+        with:
+          name: gold-ai-android-project
+          path: android
+
+      - name: Prepare Gradle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          chmod +x android/gradlew
+
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          printf 'sdk.dir=%s\n' "$SDK_PATH" > android/local.properties
+
+      # --------------------------------------------------------
+      # FIRST BUILD
+      # --------------------------------------------------------
+
+      - name: First Gradle build
+        id: first_build
+        continue-on-error: true
+        working-directory: android
+        shell: bash
+        run: |
+          set -o pipefail
+
+          ./gradlew clean 2>&1 | tee ../gradle-clean.log
+
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --no-daemon \
+            --warning-mode all \
+            2>&1 | tee ../gradle-first-build.log
+
+      # --------------------------------------------------------
+      # DIAGNOSTICS
+      # --------------------------------------------------------
+
+      - name: Analyze first build failure
+        if: steps.first_build.outcome == 'failure'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mkdir -p build-diagnostics
+
+          if [ -f gradle-first-build.log ]; then
+            cp gradle-first-build.log \
+              build-diagnostics/gradle-first-build.log
+          fi
+
+          echo "=========================================="
+          echo " BUILD FAILURE ANALYSIS"
+          echo "=========================================="
+
+          grep -Ei \
+            "error:|failed|exception|could not|unable|manifest|resource|duplicate|namespace|sdk|gradle|java|kotlin" \
+            gradle-first-build.log \
+            | tail -300 \
+            > build-diagnostics/error-summary.txt || true
+
+          echo
+          echo "Potential error lines:"
+          cat build-diagnostics/error-summary.txt || true
+
+      # --------------------------------------------------------
+      # SAFE AUTO REPAIR
+      # --------------------------------------------------------
+
+      - name: Safe automatic repair
+        if: >
+          steps.first_build.outcome == 'failure' &&
+          (github.event_name != 'workflow_dispatch' ||
+          inputs.auto_repair == true)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " SMART REPAIR ENGINE"
+          echo "=========================================="
+
+          echo "Repair 1: Gradle executable permission"
+
+          chmod +x android/gradlew
+
+          echo "Repair 2: Configure Android SDK"
+
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          printf 'sdk.dir=%s\n' "$SDK_PATH" > android/local.properties
+
+          echo "Repair 3: Remove Gradle cache"
+
+          rm -rf android/.gradle
+
+          echo "Repair 4: Remove stale build output"
+
+          rm -rf android/app/build
+
+          echo "Repair 5: Remove native temporary directories"
+
+          find android \
+            -type d \
+            -name ".cxx" \
+            -prune \
+            -exec rm -rf {} + \
+            2>/dev/null || true
+
+          echo "Repair 6: Verify SDK packages"
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;${BUILD_TOOLS}"
+
+          echo
+          echo "Safe repairs completed."
+
+      # --------------------------------------------------------
+      # SECOND BUILD
+      # --------------------------------------------------------
+
+      - name: Retry Gradle build
+        id: retry_build
+        if: steps.first_build.outcome == 'failure'
+        continue-on-error: true
+        working-directory: android
+        shell: bash
+        run: |
+          set -o pipefail
+
+          ./gradlew clean 2>&1 | tee ../gradle-retry-clean.log
+
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --no-daemon \
+            --warning-mode all \
+            2>&1 | tee ../gradle-retry-build.log
+
+      # --------------------------------------------------------
+      # FINAL DIAGNOSTICS
+      # --------------------------------------------------------
+
+      - name: Save retry diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mkdir -p build-diagnostics
+
+          [ -f gradle-clean.log ] && \
+            cp gradle-clean.log build-diagnostics/ || true
+
+          [ -f gradle-first-build.log ] && \
+            cp gradle-first-build.log build-diagnostics/ || true
+
+          [ -f gradle-retry-clean.log ] && \
+            cp gradle-retry-clean.log build-diagnostics/ || true
+
+          [ -f gradle-retry-build.log ] && \
+            cp gradle-retry-build.log build-diagnostics/ || true
+
+          if [ -f gradle-retry-build.log ]; then
+
+            grep -Ei \
+              "error:|failed|exception|could not|unable|manifest|resource|duplicate|namespace|sdk|gradle|java|kotlin" \
+              gradle-retry-build.log \
+              | tail -500 \
+              > build-diagnostics/final-error-summary.txt || true
+
+          fi
+
+      # --------------------------------------------------------
+      # VERIFY APK
+      # --------------------------------------------------------
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          echo "=========================================="
+          echo " APK VERIFICATION"
+          echo "=========================================="
+
+          if [ ! -f "$APK" ]; then
+
+            echo "::error::APK was not generated."
+
+            echo
+            echo "Android build files:"
+
+            find android/app/build \
+              -type f \
+              2>/dev/null \
+              | sort || true
+
+            echo
+            echo "Final Gradle error:"
+            cat build-diagnostics/final-error-summary.txt \
+              2>/dev/null || true
+
+            exit 1
+
+          fi
+
+          APK_SIZE=$(stat -c%s "$APK")
+
+          echo "APK size: $APK_SIZE bytes"
+
+          if [ "$APK_SIZE" -lt 100000 ]; then
+
+            echo "::error::APK appears invalid or suspiciously small."
+
+            exit 1
+
+          fi
+
+          echo
+          echo "Testing APK ZIP integrity..."
+
+          unzip -t "$APK" >/dev/null
+
+          echo
+          echo "APK integrity: OK"
+
+          echo
+          echo "APK:"
+          ls -lh "$APK"
+
+      - name: Generate APK checksum
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          sha256sum "$APK" | tee apk.sha256
+
+      # --------------------------------------------------------
+      # UPLOAD APK
+      # --------------------------------------------------------
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-v2-debug-apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      # --------------------------------------------------------
+      # UPLOAD DIAGNOSTICS
+      # --------------------------------------------------------
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-build-diagnostics
+          path: build-diagnostics
+          if-no-files-found: ignore
+          retention-days: 30
+
+
+  # ============================================================
+  # 5. FINAL REPORT
+  # ============================================================
+
+  report:
+    name: "5 - Final Build Report"
+
+    needs:
+      - audit
+      - web-build
+      - android-prepare
+      - android-build
+
+    if: always()
+
+    runs-on: ubuntu-24.04
+
+    steps:
+
+      - name: Final report
+        shell: bash
+        run: |
+          echo
+          echo "================================================"
+          echo "       GOLD AI ANDROID BUILD REPORT"
+          echo "================================================"
+          echo
+          echo "Project Audit:       ${{ needs.audit.result }}"
+          echo "Web Build:           ${{ needs.web-build.result }}"
+          echo "Android Preparation: ${{ needs.android-prepare.result }}"
+          echo "Android Build:       ${{ needs.android-build.result }}"
+          echo
+
+          if [ "${{ needs.android-build.result }}" = "success" ]; then
+
+            echo "================================================"
+            echo "              BUILD SUCCESSFUL"
+            echo "================================================"
+            echo
+            echo "The APK is available under:"
+            echo
+            echo "GitHub Actions -> Artifacts"
+            echo
+            echo "Artifact:"
+            echo "gold-ai-v2-debug-apk"
+
+            exit 0
+
+          fi
+
+          echo "================================================"
+          echo "              BUILD FAILED"
+          echo "================================================"
+          echo
+          echo "Download:"
+          echo "gold-ai-build-diagnostics"
+          echo
+          echo "The diagnostic artifact contains the"
+          echo "Gradle error logs and failure analysis."
+
+          exit 1
