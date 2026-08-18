@@ -14,7 +14,6 @@ function findAsset(prefix: string, ext: string) {
 }
 
 const indexJs = findAsset('index', '.js');
-const routesJs = findAsset('routes', '.js');
 const stylesCss = findAsset('styles', '.css');
 
 if (!indexJs || !stylesCss) {
@@ -36,7 +35,6 @@ const html = `<!DOCTYPE html>
   </head>
   <body class="bg-[#03060d] text-[#c5d4e8] overscroll-none">
     <div id="root"></div>
-    <script type="module" src="/assets/${routesJs}"></script>
     <script type="module" src="/assets/${indexJs}"></script>
   </body>
 </html>
