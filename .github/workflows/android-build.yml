@@ -1,0 +1,581 @@
+name: Gold AI - Android Production Build
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Android build type"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  JAVA_VERSION: "21"
+  ANDROID_API: "35"
+  BUILD_TOOLS: "35.0.0"
+  BUN_VERSION: "1.3.14"
+
+jobs:
+
+  # ============================================================
+  # 1. AUDIT
+  # ============================================================
+
+  audit:
+    name: "1 - Project Audit"
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 20
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Verify project
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " GOLD AI PROJECT AUDIT"
+          echo "=========================================="
+
+          test -f package.json
+          test -f bun.lock
+          test -f bunfig.toml
+          test -f capacitor.config.ts
+          test -f vite.config.ts
+          test -f tsconfig.json
+          test -f eslint.config.js
+          test -f scripts/build-mobile-html.js
+          test -d src
+
+          echo "All required files exist."
+
+      - name: Print project information
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          node -e '
+          const fs = require("fs");
+          const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
+
+          console.log("Name:", p.name);
+          console.log("Version:", p.version);
+          console.log("Scripts:");
+          console.log(JSON.stringify(p.scripts, null, 2));
+          '
+
+          echo
+          echo "Node:"
+          node --version
+
+          echo
+          echo "Bun:"
+          bun --version
+
+      - name: Verify Capacitor configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " CAPACITOR CONFIG"
+          echo "=========================================="
+
+          grep -q "com.goldai.v2" capacitor.config.ts
+          grep -q "dist/client" capacitor.config.ts
+
+          echo "Capacitor appId: com.goldai.v2"
+          echo "Capacitor webDir: dist/client"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bun install --frozen-lockfile
+
+      # --------------------------------------------------------
+      # AUTO FORMAT
+      # --------------------------------------------------------
+
+      - name: Auto format source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " AUTO FORMAT"
+          echo "=========================================="
+
+          bunx prettier \
+            --write \
+            capacitor.config.ts \
+            scripts \
+            src \
+            vite.config.ts \
+            eslint.config.js
+
+      # --------------------------------------------------------
+      # ESLINT REPORT
+      # --------------------------------------------------------
+
+      - name: ESLint repair pass
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bunx eslint . --fix || true
+
+      - name: ESLint final report
+        shell: bash
+        run: |
+          set +e
+
+          bunx eslint . \
+            --format stylish \
+            > eslint-report.txt 2>&1
+
+          STATUS=$?
+
+          cat eslint-report.txt
+
+          echo
+          echo "ESLint exit code: $STATUS"
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::warning::ESLint still reports code-quality issues."
+            echo "These issues will be reported but will NOT block Android compilation."
+          fi
+
+          exit 0
+
+      - name: Upload lint report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-lint-report
+          path: eslint-report.txt
+          retention-days: 14
+
+
+  # ============================================================
+  # 2. WEB BUILD
+  # ============================================================
+
+  web-build:
+    name: "2 - Production Web Build"
+
+    needs: audit
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 25
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: TypeScript check
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bunx tsc --noEmit
+
+      - name: Build production web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bun run build
+
+      - name: Generate mobile HTML
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bun scripts/build-mobile-html.js
+
+      - name: Verify web output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -f dist/client/index.html
+
+          echo "Web build successful."
+
+          echo
+          echo "Output:"
+          find dist/client \
+            -maxdepth 2 \
+            -type f \
+            | sort \
+            | head -300
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-web-build
+          path: dist/client
+          retention-days: 14
+
+
+  # ============================================================
+  # 3. ANDROID PREPARATION
+  # ============================================================
+
+  android:
+    name: "3 - Android Build"
+
+    needs: web-build
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 45
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Setup Android
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;${BUILD_TOOLS}"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bun install --frozen-lockfile
+
+      # --------------------------------------------------------
+      # BUILD MOBILE
+      # --------------------------------------------------------
+
+      - name: Build mobile web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bun run build:mobile
+
+      - name: Verify mobile web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -f dist/client/index.html
+
+      # --------------------------------------------------------
+      # CAPACITOR
+      # --------------------------------------------------------
+
+      - name: Verify Android platform
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ ! -d android ]; then
+            echo "Android platform does not exist."
+            echo "Creating Android platform..."
+
+            bunx cap add android
+          else
+            echo "Android platform already exists."
+          fi
+
+      - name: Capacitor sync
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bunx cap sync android
+
+      # --------------------------------------------------------
+      # ANDROID SDK
+      # --------------------------------------------------------
+
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          test -n "$SDK_PATH"
+
+          printf 'sdk.dir=%s\n' "$SDK_PATH" \
+            > android/local.properties
+
+          cat android/local.properties
+
+      # --------------------------------------------------------
+      # VERIFY GRADLE
+      # --------------------------------------------------------
+
+      - name: Verify Gradle project
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -f android/gradlew
+          test -d android/app
+
+          chmod +x android/gradlew
+
+          echo "Gradle project verified."
+
+      # --------------------------------------------------------
+      # GRADLE ENVIRONMENT
+      # --------------------------------------------------------
+
+      - name: Show Gradle environment
+        working-directory: android
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          ./gradlew --version
+
+      # --------------------------------------------------------
+      # BUILD DEBUG APK
+      # --------------------------------------------------------
+
+      - name: Build Debug APK
+        id: debug_build
+        continue-on-error: true
+        working-directory: android
+        shell: bash
+        run: |
+          set -o pipefail
+
+          ./gradlew clean \
+            --no-daemon \
+            --stacktrace \
+            2>&1 | tee ../gradle-clean.log
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            2>&1 | tee ../gradle-build.log
+
+      # --------------------------------------------------------
+      # SMART REPAIR
+      # --------------------------------------------------------
+
+      - name: Smart Android repair
+        if: steps.debug_build.outcome == 'failure'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo " SMART ANDROID REPAIR"
+          echo "=========================================="
+
+          echo
+          echo "Cleaning Gradle..."
+
+          rm -rf android/.gradle
+          rm -rf android/app/build
+
+          echo
+          echo "Fixing Gradle permissions..."
+
+          chmod +x android/gradlew
+
+          echo
+          echo "Recreating local.properties..."
+
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          printf 'sdk.dir=%s\n' "$SDK_PATH" \
+            > android/local.properties
+
+          echo
+          echo "Refreshing Capacitor..."
+
+          bunx cap sync android
+
+      # --------------------------------------------------------
+      # RETRY
+      # --------------------------------------------------------
+
+      - name: Retry Android build
+        id: retry_build
+        if: steps.debug_build.outcome == 'failure'
+        continue-on-error: true
+        working-directory: android
+        shell: bash
+        run: |
+          set -o pipefail
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            2>&1 | tee ../gradle-retry.log
+
+      # --------------------------------------------------------
+      # VERIFY APK
+      # --------------------------------------------------------
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          echo "=========================================="
+          echo " APK VERIFICATION"
+          echo "=========================================="
+
+          if [ ! -f "$APK" ]; then
+
+            echo "::error::APK was not generated."
+
+            echo
+            echo "===== FIRST BUILD LOG ====="
+
+            cat gradle-build.log \
+              2>/dev/null || true
+
+            echo
+            echo "===== RETRY BUILD LOG ====="
+
+            cat gradle-retry.log \
+              2>/dev/null || true
+
+            exit 1
+          fi
+
+          SIZE=$(stat -c%s "$APK")
+
+          echo "APK size: $SIZE bytes"
+
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "::error::APK is suspiciously small."
+            exit 1
+          fi
+
+          echo
+          echo "Testing APK integrity..."
+
+          unzip -t "$APK" >/dev/null
+
+          echo
+          echo "APK integrity: OK"
+
+          ls -lh "$APK"
+
+      # --------------------------------------------------------
+      # CHECKSUM
+      # --------------------------------------------------------
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sha256sum \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            | tee apk.sha256
+
+      # --------------------------------------------------------
+      # UPLOAD APK
+      # --------------------------------------------------------
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-v2-debug-apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      # --------------------------------------------------------
+      # UPLOAD GRADLE LOGS
+      # --------------------------------------------------------
+
+      - name: Upload Gradle diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-ai-gradle-diagnostics
+          path: |
+            gradle-clean.log
+            gradle-build.log
+            gradle-retry.log
+          if-no-files-found: ignore
+          retention-days: 30
