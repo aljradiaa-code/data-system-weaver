@@ -9,7 +9,7 @@ import path from 'node:path';
 const clientDir = path.resolve('dist/client');
 const assetsDir = path.join(clientDir, 'assets');
 
-function findAsset(prefix: string, ext: string) {
+function findAsset(prefix, ext) {
   return fs.readdirSync(assetsDir).find((f) => f.startsWith(prefix) && f.endsWith(ext));
 }
 
