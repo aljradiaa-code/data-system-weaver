@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "build:android": "vite build && npx cap sync android",
+    "build:mobile": "vite build && node scripts/build-mobile-html.js && npx cap sync android",
     "android": "npx cap open android"
   },
   "dependencies": {
