@@ -1,0 +1,62 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Build Web App
+        run: bun run build
+
+      - name: Fix Capacitor Config WebDir
+        run: |
+          # تعديل مسار webDir داخل capacitor.config تلقائياً إلى dist
+          sed -i "s|'dist/client'|'dist'|g" capacitor.config.ts 2>/dev/null || true
+          sed -i 's|"dist/client"|"dist"|g' capacitor.config.json 2>/dev/null || true
+
+      - name: Add Capacitor Android Platform
+        run: |
+          bun add @capacitor/core @capacitor/cli @capacitor/android
+          bunx cap add android || true
+
+      - name: Sync Capacitor
+        run: bunx cap sync android
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
